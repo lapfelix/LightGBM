@@ -331,6 +331,7 @@ const std::unordered_set<std::string>& Config::parameter_set() {
   "gpu_use_dp",
   "num_gpu",
   "metal_min_hist_workload",
+  "metal_min_partition_rows",
   });
   return params;
 }
@@ -681,6 +682,9 @@ void Config::GetMembersFromString(const std::unordered_map<std::string, std::str
 
   GetInt(params, "metal_min_hist_workload", &metal_min_hist_workload);
   CHECK_GE(metal_min_hist_workload, 0);
+
+  GetInt(params, "metal_min_partition_rows", &metal_min_partition_rows);
+  CHECK_GE(metal_min_partition_rows, 0);
 }
 
 std::string Config::SaveMembersToString() const {
@@ -802,6 +806,7 @@ std::string Config::SaveMembersToString() const {
   str_buf << "[gpu_use_dp: " << gpu_use_dp << "]\n";
   str_buf << "[num_gpu: " << num_gpu << "]\n";
   str_buf << "[metal_min_hist_workload: " << metal_min_hist_workload << "]\n";
+  str_buf << "[metal_min_partition_rows: " << metal_min_partition_rows << "]\n";
   return str_buf.str();
 }
 
@@ -949,6 +954,7 @@ const std::unordered_map<std::string, std::vector<std::string>>& Config::paramet
     {"gpu_use_dp", {}},
     {"num_gpu", {}},
     {"metal_min_hist_workload", {}},
+    {"metal_min_partition_rows", {}},
   });
   return map;
 }
@@ -1096,6 +1102,7 @@ const std::unordered_map<std::string, std::string>& Config::ParameterTypes() {
     {"gpu_use_dp", "bool"},
     {"num_gpu", "int"},
     {"metal_min_hist_workload", "int"},
+    {"metal_min_partition_rows", "int"},
   });
   return map;
 }

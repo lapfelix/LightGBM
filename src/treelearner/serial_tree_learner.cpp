@@ -790,9 +790,9 @@ void SerialTreeLearner::SplitInner(Tree* tree, int best_leaf, int* left_leaf,
   if (is_numerical_split) {
     auto threshold_double = train_data_->RealThreshold(
         inner_feature_index, best_split_info.threshold);
-    data_partition_->Split(best_leaf, train_data_, inner_feature_index,
-                           &best_split_info.threshold, 1,
-                           best_split_info.default_left, next_leaf_id);
+    PartitionLeaf(best_leaf, inner_feature_index,
+                &best_split_info.threshold, 1,
+                best_split_info.default_left, next_leaf_id);
     if (update_cnt) {
       // don't need to update this in data-based parallel model
       best_split_info.left_count = data_partition_->leaf_count(*left_leaf);
@@ -824,10 +824,10 @@ void SerialTreeLearner::SplitInner(Tree* tree, int best_leaf, int* left_leaf,
     std::vector<uint32_t> cat_bitset = Common::ConstructBitset(
         threshold_int.data(), best_split_info.num_cat_threshold);
 
-    data_partition_->Split(best_leaf, train_data_, inner_feature_index,
-                           cat_bitset_inner.data(),
-                           static_cast<int>(cat_bitset_inner.size()),
-                           best_split_info.default_left, next_leaf_id);
+    PartitionLeaf(best_leaf, inner_feature_index,
+                cat_bitset_inner.data(),
+                static_cast<int>(cat_bitset_inner.size()),
+                best_split_info.default_left, next_leaf_id);
 
     if (update_cnt) {
       // don't need to update this in data-based parallel model

@@ -37,11 +37,17 @@ struct MetalContextImpl {
   void* device = nil;
   void* queue = nil;
   void* pending = nil;
+  void* partition_library = nil;
   std::map<PipelineKey, void*> pipelines;
+  std::map<std::string, void*> partition_pipelines;
   uint64_t num_launches = 0;
   uint64_t num_rows = 0;
+  uint64_t num_partitions = 0;
+  uint64_t num_partition_rows = 0;
   double wait_seconds = 0.0;
   double exec_seconds = 0.0;
+  double partition_wait_seconds = 0.0;
+  double partition_exec_seconds = 0.0;
 };
 
 static void ReleaseImpl(MetalContextImpl* impl) {
@@ -55,6 +61,11 @@ static void ReleaseImpl(MetalContextImpl* impl) {
     CFRelease(kv.second);
   }
   impl->pipelines.clear();
+  for (auto& kv : impl->partition_pipelines) {
+    CFRelease(kv.second);
+  }
+  impl->partition_pipelines.clear();
+  if (impl->partition_library != nil) { CFRelease(impl->partition_library); }
   if (impl->queue != nil) { CFRelease(impl->queue); }
   if (impl->device != nil) { CFRelease(impl->device); }
   delete impl;
@@ -213,6 +224,130 @@ void MetalHistogramContext::LaunchHistogramAsync(
   }
 }
 
+static id GetPartitionPipeline(MetalContextImpl* impl, const char* name) {
+  auto it = impl->partition_pipelines.find(name);
+  if (it != impl->partition_pipelines.end()) {
+    return (__bridge id)(it->second);
+  }
+  @autoreleasepool {
+    id<MTLDevice> device = (__bridge id<MTLDevice>)(impl->device);
+    // Partition kernels carry no specialization macros; one default library,
+    // compiled once, serves all three entry points.
+    if (impl->partition_library == nil) {
+      MTLCompileOptions* options = [[MTLCompileOptions alloc] init];
+      options.languageVersion = MTLLanguageVersion3_1;
+      const char* src = std::strstr(kMetalKernelRawSource, kMetalSourceMarker);
+      NSString* source = [NSString stringWithUTF8String:src];
+      NSError* error = nil;
+      id<MTLLibrary> library =
+          [device newLibraryWithSource:source options:options error:&error];
+      if (library == nil) {
+        Log::Fatal("Metal backend: partition library compilation failed: %s",
+                   error != nil ? [[error description] UTF8String] : "unknown error");
+      }
+      impl->partition_library = (__bridge_retained void*)library;
+    }
+    id<MTLLibrary> library = (__bridge id<MTLLibrary>)(impl->partition_library);
+    NSError* error = nil;
+    NSString* func_name = [NSString stringWithUTF8String:name];
+    id<MTLFunction> function = [library newFunctionWithName:func_name];
+    if (function == nil) {
+      Log::Fatal("Metal backend: function '%s' not found in partition library", name);
+    }
+    id<MTLComputePipelineState> pipeline =
+        [device newComputePipelineStateWithFunction:function error:&error];
+    if (pipeline == nil) {
+      Log::Fatal("Metal backend: partition pipeline '%s' creation failed: %s", name,
+                 error != nil ? [[error description] UTF8String] : "unknown error");
+    }
+    impl->partition_pipelines[name] = (__bridge_retained void*)pipeline;
+    return pipeline;
+  }
+}
+
+void MetalHistogramContext::LaunchPartitionSync(
+    const void* bins, const void* idx_in, void* idx_out,
+    void* block_counts, void* block_offsets, void* result,
+    const void* cat_bits, int num_rows, int num_blocks,
+    const PartitionParams& params) {
+  @autoreleasepool {
+    MetalContextImpl* impl = static_cast<MetalContextImpl*>(impl_);
+    if (impl->pending != nil) {
+      Log::Fatal("Metal backend: LaunchPartitionSync called while a histogram dispatch is still in flight");
+    }
+    static_assert(sizeof(PartitionParams) == 9 * sizeof(uint32_t),
+                  "PartitionParams must match MetalPartitionParams");
+    id<MTLComputePipelineState> count_pipeline =
+        GetPartitionPipeline(impl, "metal_partition_count");
+    id<MTLComputePipelineState> scan_pipeline =
+        GetPartitionPipeline(impl, "metal_partition_scan");
+    id<MTLComputePipelineState> scatter_pipeline =
+        GetPartitionPipeline(impl, "metal_partition_scatter");
+    id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)(impl->queue);
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    const uint32_t tg_size = 256;
+    const uint32_t rows = (uint32_t)num_rows;
+    const uint32_t blocks = (uint32_t)num_blocks;
+    // Pass 1: per-block left counts.
+    {
+      id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
+      [enc setComputePipelineState:count_pipeline];
+      [enc setBuffer:(__bridge id<MTLBuffer>)bins offset:0 atIndex:0];
+      [enc setBuffer:(__bridge id<MTLBuffer>)idx_in offset:0 atIndex:1];
+      [enc setBuffer:(__bridge id<MTLBuffer>)block_counts offset:0 atIndex:2];
+      [enc setBuffer:(__bridge id<MTLBuffer>)cat_bits offset:0 atIndex:3];
+      [enc setBytes:&params length:sizeof(params) atIndex:4];
+      [enc setBytes:&rows length:sizeof(rows) atIndex:5];
+      [enc dispatchThreads:MTLSizeMake((uint32_t)num_blocks * tg_size, 1, 1)
+          threadsPerThreadgroup:MTLSizeMake(tg_size, 1, 1)];
+      [enc endEncoding];
+    }
+    // Pass 2: exclusive prefix over block counts (+ total into result[0]).
+    {
+      id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
+      [enc setComputePipelineState:scan_pipeline];
+      [enc setBuffer:(__bridge id<MTLBuffer>)block_counts offset:0 atIndex:0];
+      [enc setBuffer:(__bridge id<MTLBuffer>)block_offsets offset:0 atIndex:1];
+      [enc setBuffer:(__bridge id<MTLBuffer>)result offset:0 atIndex:2];
+      [enc setBytes:&blocks length:sizeof(blocks) atIndex:3];
+      [enc dispatchThreads:MTLSizeMake(1, 1, 1)
+          threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+      [enc endEncoding];
+    }
+    // Pass 3: stable scatter into the output index array.
+    {
+      id<MTLComputeCommandEncoder> enc = [cb computeCommandEncoder];
+      [enc setComputePipelineState:scatter_pipeline];
+      [enc setBuffer:(__bridge id<MTLBuffer>)bins offset:0 atIndex:0];
+      [enc setBuffer:(__bridge id<MTLBuffer>)idx_in offset:0 atIndex:1];
+      [enc setBuffer:(__bridge id<MTLBuffer>)idx_out offset:0 atIndex:2];
+      [enc setBuffer:(__bridge id<MTLBuffer>)block_offsets offset:0 atIndex:3];
+      [enc setBuffer:(__bridge id<MTLBuffer>)block_counts offset:0 atIndex:4];
+      [enc setBuffer:(__bridge id<MTLBuffer>)result offset:0 atIndex:5];
+      [enc setBuffer:(__bridge id<MTLBuffer>)cat_bits offset:0 atIndex:6];
+      [enc setBytes:&params length:sizeof(params) atIndex:7];
+      [enc setBytes:&rows length:sizeof(rows) atIndex:8];
+      [enc dispatchThreads:MTLSizeMake((uint32_t)num_blocks * tg_size, 1, 1)
+          threadsPerThreadgroup:MTLSizeMake(tg_size, 1, 1)];
+      [enc endEncoding];
+    }
+    [cb commit];
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    [cb waitUntilCompleted];
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    impl->partition_wait_seconds += (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) * 1e-9;
+    impl->partition_exec_seconds += [cb GPUEndTime] - [cb GPUStartTime];
+    impl->num_partitions += 1;
+    impl->num_partition_rows += (uint64_t)num_rows;
+    if ([cb status] == MTLCommandBufferStatusError) {
+      NSError* error = [cb error];
+      Log::Fatal("Metal backend: partition command buffer failed: %s",
+                 error != nil ? [[error description] UTF8String] : "unknown error");
+    }
+  }
+}
+
 void MetalHistogramContext::Wait() {
   MetalContextImpl* impl = static_cast<MetalContextImpl*>(impl_);
   if (impl->pending == nil) {
@@ -237,12 +372,19 @@ void MetalHistogramContext::Wait() {
 
 void MetalHistogramContext::LogStats() const {
   const MetalContextImpl* impl = static_cast<const MetalContextImpl*>(impl_);
-  if (impl->num_launches == 0) {
+  if (impl->num_launches == 0 && impl->num_partitions == 0) {
     return;
   }
-  Log::Info("Metal backend: %llu dispatches, %llu leaf rows, %.3f s in GPU wait (%.1f us/dispatch), %.3f s GPU exec",
-            impl->num_launches, impl->num_rows, impl->wait_seconds,
-            impl->wait_seconds * 1e6 / impl->num_launches, impl->exec_seconds);
+  if (impl->num_launches > 0) {
+    Log::Info("Metal backend: %llu dispatches, %llu leaf rows, %.3f s in GPU wait (%.1f us/dispatch), %.3f s GPU exec",
+              impl->num_launches, impl->num_rows, impl->wait_seconds,
+              impl->wait_seconds * 1e6 / impl->num_launches, impl->exec_seconds);
+  }
+  if (impl->num_partitions > 0) {
+    Log::Info("Metal backend partitions: %llu dispatches, %llu leaf rows, %.3f s in GPU wait (%.1f us/dispatch), %.3f s GPU exec",
+              impl->num_partitions, impl->num_partition_rows, impl->partition_wait_seconds,
+              impl->partition_wait_seconds * 1e6 / impl->num_partitions, impl->partition_exec_seconds);
+  }
 }
 
 }  // namespace LightGBM

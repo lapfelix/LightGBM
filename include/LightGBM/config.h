@@ -1155,6 +1155,14 @@ struct Config {
   // desc = set to ``0`` to always use Metal for dense feature groups
   int metal_min_hist_workload = 5000000;
 
+  // check = >=0
+  // desc = minimum leaf row count for Metal GPU leaf partitioning (data split)
+  // desc = leaves with fewer rows are partitioned on the CPU, avoiding GPU dispatch overhead on small leaves
+  // desc = **Note**: can be used only in Metal implementation (``device_type="metal"``)
+  // desc = default leaves partitioning on the CPU, which beats the GPU path on current hardware
+  // desc = (per-dispatch latency dominates); lower to experiment with GPU partitioning
+  int metal_min_partition_rows = 2147483647;
+
   #ifndef __NVCC__
   #pragma endregion
 

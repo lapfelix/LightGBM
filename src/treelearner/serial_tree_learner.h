@@ -149,6 +149,28 @@ class SerialTreeLearner: public TreeLearner {
 
   virtual void ConstructHistograms(const std::vector<int8_t>& is_feature_used, bool use_subtract);
 
+  /*!
+  * \brief Partition one leaf's data indices by a split (GPU-overridable).
+  * \param leaf Leaf to split; its range is left in partitioned order.
+  * \param feature Inner feature index of the split.
+  * \param threshold Split threshold (single bin for numerical splits, bitset
+  *                  words for categorical splits).
+  * \param num_threshold Number of uint32 words in threshold.
+  * \param default_left Whether missing values go to the left leaf.
+  * \param right_leaf Index assigned to the right child leaf.
+  *
+  * Default implementation forwards to DataPartition::Split; accelerators
+  * override this to partition on-device and install the result via
+  * DataPartition::ApplyPartition. The installed order must be a stable
+  * partition of the leaf's previous order (exactly what DataPartition::Split
+  * produces) so downstream training is bit-identical.
+  */
+  virtual void PartitionLeaf(int leaf, int feature, const uint32_t* threshold,
+                             int num_threshold, bool default_left, int right_leaf) {
+    data_partition_->Split(leaf, train_data_, feature, threshold, num_threshold,
+                           default_left, right_leaf);
+  }
+
   virtual void FindBestSplitsFromHistograms(const std::vector<int8_t>& is_feature_used, bool use_subtract, const Tree*);
 
   /*!

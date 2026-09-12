@@ -813,6 +813,10 @@ class Dataset {
     return feature_groups_[group]->num_total_bin_;
   }
 
+  inline const std::vector<uint32_t>& FeatureGroupBinOffsets(int group) const {
+    return feature_groups_[group]->bin_offsets_;
+  }
+
   inline const BinMapper* FeatureBinMapper(int i) const {
     const int group = feature2group_[i];
     const int sub_feature = feature2subfeature_[i];

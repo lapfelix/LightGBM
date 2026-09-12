@@ -124,6 +124,30 @@ class DataPartition {
   }
 
   /*!
+  * \brief Install a pre-partitioned index order for a leaf split.
+  * \param leaf index of leaf that was split
+  * \param partitioned stably partitioned copy of this leaf's previous index
+  *        range: first left_cnt entries go left, the rest go right
+  * \param left_cnt number of entries assigned to the left child
+  * \param right_leaf index of right leaf
+  *
+  * Used by accelerator backends that partition on-device. The result must be
+  * a stable partition of the leaf's previous order, exactly as Split()
+  * produces, so that downstream training is bit-identical.
+  */
+  void ApplyPartition(int leaf, const data_size_t* partitioned,
+                      data_size_t left_cnt, int right_leaf) {
+    Common::FunctionTimer fun_timer("DataPartition::ApplyPartition", global_timer);
+    const data_size_t begin = leaf_begin_[leaf];
+    const data_size_t cnt = leaf_count_[leaf];
+    std::memcpy(indices_.data() + begin, partitioned,
+                static_cast<size_t>(cnt) * sizeof(data_size_t));
+    leaf_count_[leaf] = left_cnt;
+    leaf_begin_[right_leaf] = left_cnt + begin;
+    leaf_count_[right_leaf] = cnt - left_cnt;
+  }
+
+  /*!
   * \brief SetLabelAt used data indices before training, used for bagging
   * \param used_data_indices indices of used data
   * \param num_used_data number of used data

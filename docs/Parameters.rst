@@ -1415,6 +1415,16 @@ GPU Parameters
 
    -  set to ``0`` to always use Metal for dense feature groups
 
+-  ``metal_min_partition_rows`` :raw-html:`<a id="metal_min_partition_rows" title="Permalink to this parameter" href="#metal_min_partition_rows">&#x1F517;&#xFE0E;</a>`, default = ``2147483647``, type = int, constraints: ``metal_min_partition_rows >= 0``
+
+   -  minimum leaf row count for Metal GPU leaf partitioning (data split)
+
+   -  leaves with fewer rows are partitioned on the CPU, avoiding GPU dispatch overhead on small leaves
+
+   -  **Note**: can be used only in Metal implementation (``device_type="metal"``)
+
+   -  the default leaves partitioning on the CPU, which beats the GPU path on current hardware (per-dispatch latency dominates); lower to experiment with GPU partitioning
+
 .. end params list
 
 Others

@@ -170,6 +170,123 @@ def test_metal_row_wise_matches_cpu_quality():
     assert abs(roc_auc_score(y_test, pred_cpu) - roc_auc_score(y_test, pred_metal)) < 1e-3
 
 
+def _bundled_data(seed=11, n=21000):
+    """Three mutually-exclusive sparse features EFB bundles into one single-val group.
+
+    f0/f1/f2 are nonzero on disjoint row thirds, so their conflict counts are
+    0 and they share one DenseBin with offset sub-ranges. All three drive the
+    label hard so trees must split on the bundled group (otherwise a bad
+    GPU->pool copy for bundled groups would go unnoticed).
+    """
+    rng = np.random.default_rng(seed)
+    X = np.zeros((n, 7), dtype=np.float32)
+    X[0::3, 0] = rng.random((n + 2) // 3)
+    X[1::3, 1] = rng.random((n + 1) // 3)
+    X[2::3, 2] = rng.random(n // 3)
+    X[:, 3] = rng.normal(0, 1, n)
+    X[:, 4] = rng.random(n) * 10
+    X[:, 5] = rng.normal(5, 2, n)
+    X[:, 6] = rng.integers(0, 20, n).astype(np.float32)
+    y = 50 * X[:, 0] + 50 * X[:, 1] + 50 * X[:, 2] + 2 * X[:, 3] + rng.normal(0, 1, n)
+    return X, y
+
+
+@needs_metal
+@pytest.mark.parametrize("force_row_wise", [False, True])
+def test_metal_bundled_group_matches_cpu(force_row_wise):
+    """Bundled single-val groups must copy to the pool with correct offsets.
+
+    Regression test: the GPU->pool copy plan must use each group's cumulative
+    stored offsets per sub-feature. Using per-feature flags instead silently
+    shifts every bundled sub-feature's histogram (src ranges [0, 1) + rest
+    instead of the true stored sub-ranges).
+    """
+    X, y = _bundled_data()
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=3)
+    train_data = lgb.Dataset(X_train, label=y_train)
+    base_params = {
+        "objective": "regression",
+        "verbose": -1,
+        "num_threads": 1,
+        "num_leaves": 31,
+        "max_bin": 63,
+        "min_data_in_leaf": 20,
+        "force_row_wise": force_row_wise,
+    }
+    bst_cpu = lgb.train({**base_params, "device_type": "cpu"}, train_data, num_boost_round=20)
+    bst_metal = lgb.train(
+        {**base_params, "device_type": "metal", "metal_min_hist_workload": 0},
+        train_data,
+        num_boost_round=20,
+    )
+    pred_cpu = bst_cpu.predict(X_test)
+    pred_metal = bst_metal.predict(X_test)
+    assert np.corrcoef(pred_cpu, pred_metal)[0, 1] > 0.999
+    assert float(np.abs(pred_cpu - pred_metal).mean()) < 0.5
+    rmse = lambda p: float(np.sqrt(np.mean((p - y_test) ** 2)))
+    assert abs(rmse(pred_cpu) - rmse(pred_metal)) / rmse(pred_cpu) < 0.05
+
+
+def _multival_data(seed=11, n=21000):
+    """Sparse features EFB must place in a multival group.
+
+    f0/f1 are binary with 6% ones (true most-frequent-bin-0 sub-features);
+    f2/f3 are continuous but nonzero on the same 15% of rows, so their
+    conflict count forces a multival (rather than single-val bundled) group.
+    All four drive the label hard so trees must split on the GPU-packed
+    multival columns (otherwise a bad pack/copy for them would go unnoticed).
+    """
+    rng = np.random.default_rng(seed)
+    X = np.zeros((n, 7), dtype=np.float32)
+    X[:, 0] = (rng.random(n) < 0.06).astype(np.float32)
+    X[:, 1] = (rng.random(n) < 0.06).astype(np.float32)
+    support = rng.random(n) < 0.15
+    X[support, 2] = rng.random(support.sum())
+    X[support, 3] = rng.random(support.sum()) * 10
+    X[:, 4] = rng.normal(0, 1, n)
+    X[:, 5] = rng.random(n) * 10
+    X[:, 6] = rng.normal(5, 2, n)
+    y = 50 * X[:, 0] + 50 * X[:, 1] + 50 * X[:, 2] + 5 * X[:, 3] + 2 * X[:, 4] + rng.normal(0, 1, n)
+    return X, y
+
+
+@needs_metal
+@pytest.mark.parametrize("force_row_wise", [False, True])
+def test_metal_multival_columns_match_cpu(force_row_wise):
+    """Multival sub-features packed as GPU columns must match CPU histograms.
+
+    Regression test: multival per-sub iterators return natural bins (PushData
+    stores most-frequent rows as absent and shifts the rest so Get() decodes
+    to natural). Remapping packed values (e.g. subtracting 1 for
+    most-frequent-bin-0 subs) silently shifts binary sub-feature histograms
+    and diverges training.
+    """
+    X, y = _multival_data()
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=3)
+    train_data = lgb.Dataset(X_train, label=y_train)
+    base_params = {
+        "objective": "regression",
+        "verbose": -1,
+        "num_threads": 1,
+        "num_leaves": 31,
+        "max_bin": 63,
+        "min_data_in_leaf": 20,
+        "force_row_wise": force_row_wise,
+    }
+    bst_cpu = lgb.train({**base_params, "device_type": "cpu"}, train_data, num_boost_round=20)
+    bst_metal = lgb.train(
+        {**base_params, "device_type": "metal", "metal_min_hist_workload": 0},
+        train_data,
+        num_boost_round=20,
+    )
+    pred_cpu = bst_cpu.predict(X_test)
+    pred_metal = bst_metal.predict(X_test)
+    assert np.corrcoef(pred_cpu, pred_metal)[0, 1] > 0.999
+    assert float(np.abs(pred_cpu - pred_metal).mean()) < 0.5
+    rmse = lambda p: float(np.sqrt(np.mean((p - y_test) ** 2)))
+    assert abs(rmse(pred_cpu) - rmse(pred_metal)) / rmse(pred_cpu) < 0.05
+
+
 @needs_metal
 def test_metal_model_loads_and_predicts(tmp_path):
     """A Metal-trained model must save/load/predict like any other model."""
