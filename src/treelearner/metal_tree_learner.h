@@ -102,6 +102,25 @@ class MetalTreeLearner : public SerialTreeLearner {
   int device_bin_size_ = 64;
   //! \brief Indices of all dense feature-groups
   std::vector<int> dense_feature_group_map_;
+  //! \brief One packed copy segment: GPU group slots
+  //! [src_bin_start, src_bin_start + count) land at leaf-pool bins
+  //! [dst_hist_bin, dst_hist_bin + count).
+  struct MetalCopySegment {
+    int src_bin_start;
+    int dst_hist_bin;
+    int count;
+  };
+  //! \brief Packed copy plan per dense group (outer index = dense ordinal).
+  //! The leaf pool stores each feature packed: the most-frequent bin is
+  //! omitted (its mass folds in via leaf totals), so a dense group's packed
+  //! width is smaller than its stored width whenever a sub-feature has its
+  //! most-frequent bin at 0. In row-wise mode the pool additionally starts
+  //! at bin 1 with multi-val groups consuming packed space that group
+  //! boundaries don't account for. Copying whole groups at
+  //! Dataset::GroupBinBoundary is therefore wrong twice over: it lands at
+  //! the wrong base and never skips the packed-out bins. Each segment maps
+  //! one sub-feature's stored range onto its packed range instead.
+  std::vector<std::vector<MetalCopySegment>> dense_group_copy_plan_;
   //! \brief Indices of all sparse feature-groups (informational only)
   std::vector<int> sparse_feature_group_map_;
   //! \brief Per-dense-group enable mask (1 = build histogram, 0 = skip)

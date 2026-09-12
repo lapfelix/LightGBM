@@ -123,6 +123,48 @@ void MetalTreeLearner::AllocateMetalMemory() {
       sparse_feature_group_map_.push_back(i);
     }
   }
+  // Packed copy plan: map each dense group's stored slots onto the leaf
+  // pool's packed ranges, skipping each sub-feature's omitted
+  // most-frequent bin. Destinations come from the share-state packed
+  // feature offsets, which is also what the readers use.
+  dense_group_copy_plan_.assign(num_dense_feature_groups_, {});
+  {
+    const std::vector<uint32_t>& packed_offsets =
+        share_state_->feature_hist_offsets();
+    const int total_bins = share_state_->num_hist_total_bin();
+    for (int d = 0; d < num_dense_feature_groups_; ++d) {
+      const int group = dense_feature_group_map_[d];
+      std::vector<int> subs;
+      for (int f = 0; f < num_features_; ++f) {
+        if (train_data_->Feature2Group(f) == group) {
+          subs.push_back(f);
+        }
+      }
+      std::sort(subs.begin(), subs.end(), [&](int a, int b) {
+        return train_data_->SubFeatureBinOffset(a) <
+               train_data_->SubFeatureBinOffset(b);
+      });
+      const int group_nb = train_data_->FeatureGroupNumBin(group);
+      for (size_t s = 0; s < subs.size(); ++s) {
+        const int f = subs[s];
+        const int src_start = train_data_->SubFeatureBinOffset(f);
+        const int src_end = (s + 1 < subs.size())
+            ? train_data_->SubFeatureBinOffset(subs[s + 1])
+            : group_nb;
+        // Stored sub-ranges are already packed (most-frequent bin omitted
+        // at storage), so no per-segment skip: copy verbatim onto the
+        // packed destination.
+        MetalCopySegment seg;
+        seg.src_bin_start = src_start;
+        seg.dst_hist_bin = static_cast<int>(packed_offsets[f]);
+        seg.count = src_end - src_start;
+        CHECK_GT(seg.count, 0);
+        CHECK_GE(seg.dst_hist_bin, 0);
+        CHECK_LE(seg.dst_hist_bin + seg.count, total_bins);
+        dense_group_copy_plan_[d].push_back(seg);
+      }
+    }
+  }
   const int D = num_dense_feature_groups_;
   buf_bins_ = ctx_->AllocShared((size_t)num_data_ * D * sizeof(uint8_t));
   buf_grads_ = ctx_->AllocShared((size_t)num_data_ * sizeof(score_t));
@@ -391,14 +433,14 @@ void MetalTreeLearner::WaitAndGetHistograms(hist_t* histograms) {
     if (!feature_masks_[i]) {
       continue;
     }
-    const int dense_group_index = dense_feature_group_map_[i];
-    hist_t* out = histograms + train_data_->GroupBinBoundary(dense_group_index) * 2;
-    const int bin_size = train_data_->FeatureGroupNumBin(dense_group_index);
     const float* hg = hist_g + (size_t)i * NB;
     const float* hh = hist_h + (size_t)i * NB;
-    for (int j = 0; j < bin_size; ++j) {
-      GET_GRAD(out, j) = hg[j];
-      GET_HESS(out, j) = hh[j];
+    for (const auto& seg : dense_group_copy_plan_[i]) {
+      hist_t* out = histograms + seg.dst_hist_bin * 2;
+      for (int j = 0; j < seg.count; ++j) {
+        GET_GRAD(out, j) = hg[seg.src_bin_start + j];
+        GET_HESS(out, j) = hh[seg.src_bin_start + j];
+      }
     }
   }
 }
