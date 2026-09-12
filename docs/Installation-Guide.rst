@@ -689,11 +689,53 @@ macOS
 ^^^^^
 
 The GPU version is not supported on macOS.
+Use the `Metal version <#build-metal-version>`__ (``device_type=metal``) for GPU acceleration on macOS.
 
 Docker
 ^^^^^^
 
 Refer to `GPU Docker folder <https://github.com/lightgbm-org/LightGBM/tree/main/docker/gpu>`__.
+
+Build Metal Version
+~~~~~~~~~~~~~~~~~~~
+
+The Metal-based version (``device_type=metal``) accelerates histogram construction on Apple GPUs, with the rest of training on the CPU.
+Leaves below the ``metal_min_hist_workload`` threshold stay on the CPU automatically.
+Saved models are identical in format to CPU-trained models and predict anywhere.
+
+Like the OpenCL GPU version, Metal accumulates histograms in single precision, and results may be bit-wise non-deterministic across runs.
+Validation quality is unaffected (see ``tests/python_package_test/test_metal.py``).
+
+macOS
+^^^^^
+
+On macOS (Apple Silicon, macOS 13 or newer for Metal 3 device atomics), a Metal version of LightGBM can be built using
+
+- **CMake** and **Apple Clang**;
+- **libomp** for OpenMP support (``brew install libomp``).
+
+.. code:: sh
+
+     git clone --recursive https://github.com/lightgbm-org/LightGBM
+     cd LightGBM
+     cmake -B build -S . -DUSE_METAL=ON
+     cmake --build build -j
+
+For the Python package:
+
+.. code:: sh
+
+     sh build-python.sh install --metal
+
+Windows
+^^^^^^^
+
+The Metal version is not supported on Windows.
+
+Linux
+^^^^^
+
+The Metal version is not supported on Linux.
 
 Build CUDA Version
 ~~~~~~~~~~~~~~~~~~

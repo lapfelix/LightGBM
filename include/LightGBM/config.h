@@ -1148,6 +1148,13 @@ struct Config {
   // desc = in distributed learning application, each machine can use different number of GPUs
   int num_gpu = 1;
 
+  // check = >=0
+  // desc = minimum leaf workload (rows in leaf x dense feature groups used) for Metal GPU histogram construction
+  // desc = leaves below this workload are histogrammed on the CPU, avoiding GPU dispatch overhead on small leaves
+  // desc = **Note**: can be used only in Metal implementation (``device_type="metal"``)
+  // desc = set to ``0`` to always use Metal for dense feature groups
+  int metal_min_hist_workload = 5000000;
+
   #ifndef __NVCC__
   #pragma endregion
 

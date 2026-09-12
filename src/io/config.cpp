@@ -199,6 +199,8 @@ void GetDeviceType(const std::unordered_map<std::string, std::string>& params, s
       *device_type = "gpu";
     } else if (value == std::string("cuda")) {
       *device_type = "cuda";
+    } else if (value == std::string("metal")) {
+      *device_type = "metal";
     } else {
       Log::Fatal("Unknown device type %s", value.c_str());
     }
@@ -420,6 +422,22 @@ void Config::CheckParamConflict(const std::unordered_map<std::string, std::strin
     force_row_wise = true;
     if (deterministic) {
       Log::Warning("Although \"deterministic\" is set, the results ran by GPU may be non-deterministic.");
+    }
+  } else if (device_type == std::string("metal")) {
+    // Unlike the OpenCL backend, Metal does not force col-wise storage: dense
+    // bins are packed from the per-group Bin objects (valid in either mode),
+    // so CPU fallback leaves and sparse groups use whichever threading layout
+    // is faster for the data. Row-wise mode duplicates dense bins in a
+    // multi-val structure; prefer force_col_wise=true if memory is tight.
+    if (deterministic) {
+      Log::Warning("Although \"deterministic\" is set, the results ran by Metal may be non-deterministic.");
+    }
+    if (use_quantized_grad) {
+      Log::Warning("Quantized training is not supported by Metal tree learner. Switch to full precision training.");
+      use_quantized_grad = false;
+    }
+    if (gpu_use_dp) {
+      Log::Warning("Metal tree learner always accumulates histograms in single precision; \"gpu_use_dp\" is ignored.");
     }
   }
   // linear tree learner must be serial type and run on CPU device

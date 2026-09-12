@@ -11,6 +11,7 @@ option(USE_SWIG "Enable SWIG to generate Java API" OFF)
 option(USE_TIMETAG "Set to ON to output time costs" OFF)
 option(USE_CUDA "Enable CUDA-accelerated training " OFF)
 option(USE_ROCM "Enable ROCm-accelerated training " OFF)
+option(USE_METAL "Enable Metal-accelerated training (macOS only)" OFF)
 option(USE_DEBUG "Set to ON for Debug mode" OFF)
 option(USE_SANITIZER "Use sanitizer flags" OFF)
 set(
@@ -289,6 +290,23 @@ if(USE_ROCM)
     add_definitions(-DUSE_ROCM)
 endif()
 
+if(USE_METAL)
+    if(NOT APPLE)
+        message(FATAL_ERROR "USE_METAL is only supported on macOS.")
+    endif()
+    enable_language(OBJCXX)
+    # Mirror the C++ optimization/PIC flags for the Objective-C++ sources.
+    if(USE_DEBUG)
+        set(CMAKE_OBJCXX_FLAGS "${CMAKE_OBJCXX_FLAGS} -g -O0")
+    else()
+        set(CMAKE_OBJCXX_FLAGS "${CMAKE_OBJCXX_FLAGS} -O3 -funroll-loops")
+    endif()
+    if(NOT BUILD_STATIC_LIB)
+        set(CMAKE_OBJCXX_FLAGS "${CMAKE_OBJCXX_FLAGS} -fPIC")
+    endif()
+    add_definitions(-DUSE_METAL)
+endif()
+
 include(CheckCXXSourceCompiles)
 check_cxx_source_compiles("
 #include <xmmintrin.h>
@@ -477,6 +495,16 @@ if(USE_CUDA OR USE_ROCM)
   list(APPEND LGBM_SOURCES ${LGBM_CUDA_SOURCES})
 endif()
 
+if(USE_METAL)
+  list(APPEND LGBM_SOURCES
+    src/treelearner/metal_tree_learner.cpp
+    src/treelearner/metal/metal_context.mm)
+  # The Metal context uses ARC-managed Objective-C objects behind a C++ interface.
+  set_source_files_properties(
+    src/treelearner/metal/metal_context.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+endif()
+
 if(USE_ROCM)
   set(CU_FILES "")
   foreach(file IN LISTS LGBM_CUDA_SOURCES)
@@ -605,6 +633,10 @@ endif()
 
 if(USE_GPU)
   target_link_libraries(lightgbm_objs PUBLIC ${OpenCL_LIBRARY} ${Boost_LIBRARIES})
+endif()
+
+if(USE_METAL)
+  target_link_libraries(lightgbm_objs PUBLIC "-framework Metal" "-framework Foundation")
 endif()
 
 if(USE_CUDA)

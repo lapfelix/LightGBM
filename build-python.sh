@@ -42,6 +42,8 @@
 #                                   Compile GPU version.
 #     --integrated-opencl
 #                                   Compile integrated OpenCL version.
+#     --metal
+#                                   Compile Metal version (macOS only).
 #     --mingw
 #                                   Compile with MinGW.
 #     --mpi
@@ -152,6 +154,9 @@ while [ $# -gt 0 ]; do
         ;;
     --integrated-opencl)
         BUILD_ARGS="${BUILD_ARGS} --config-setting=cmake.define.__INTEGRATE_OPENCL=ON"
+        ;;
+    --metal)
+        BUILD_ARGS="${BUILD_ARGS} --config-setting=cmake.define.USE_METAL=ON"
         ;;
     --mingw)
         # ref: https://stackoverflow.com/a/45104058/3986677

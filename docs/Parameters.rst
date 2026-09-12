@@ -1405,6 +1405,16 @@ GPU Parameters
 
    -  in distributed learning application, each machine can use different number of GPUs
 
+-  ``metal_min_hist_workload`` :raw-html:`<a id="metal_min_hist_workload" title="Permalink to this parameter" href="#metal_min_hist_workload">&#x1F517;&#xFE0E;</a>`, default = ``5000000``, type = int, constraints: ``metal_min_hist_workload >= 0``
+
+   -  minimum leaf workload (rows in leaf x dense feature groups used) for Metal GPU histogram construction
+
+   -  leaves below this workload are histogrammed on the CPU, avoiding GPU dispatch overhead on small leaves
+
+   -  **Note**: can be used only in Metal implementation (``device_type="metal"``)
+
+   -  set to ``0`` to always use Metal for dense feature groups
+
 .. end params list
 
 Others

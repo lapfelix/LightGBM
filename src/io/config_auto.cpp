@@ -330,6 +330,7 @@ const std::unordered_set<std::string>& Config::parameter_set() {
   "gpu_device_id_list",
   "gpu_use_dp",
   "num_gpu",
+  "metal_min_hist_workload",
   });
   return params;
 }
@@ -677,6 +678,9 @@ void Config::GetMembersFromString(const std::unordered_map<std::string, std::str
 
   GetInt(params, "num_gpu", &num_gpu);
   CHECK_GT(num_gpu, 0);
+
+  GetInt(params, "metal_min_hist_workload", &metal_min_hist_workload);
+  CHECK_GE(metal_min_hist_workload, 0);
 }
 
 std::string Config::SaveMembersToString() const {
@@ -797,6 +801,7 @@ std::string Config::SaveMembersToString() const {
   str_buf << "[gpu_device_id_list: " << gpu_device_id_list << "]\n";
   str_buf << "[gpu_use_dp: " << gpu_use_dp << "]\n";
   str_buf << "[num_gpu: " << num_gpu << "]\n";
+  str_buf << "[metal_min_hist_workload: " << metal_min_hist_workload << "]\n";
   return str_buf.str();
 }
 
@@ -943,6 +948,7 @@ const std::unordered_map<std::string, std::vector<std::string>>& Config::paramet
     {"gpu_device_id_list", {}},
     {"gpu_use_dp", {}},
     {"num_gpu", {}},
+    {"metal_min_hist_workload", {}},
   });
   return map;
 }
@@ -1089,6 +1095,7 @@ const std::unordered_map<std::string, std::string>& Config::ParameterTypes() {
     {"gpu_device_id_list", "string"},
     {"gpu_use_dp", "bool"},
     {"num_gpu", "int"},
+    {"metal_min_hist_workload", "int"},
   });
   return map;
 }
